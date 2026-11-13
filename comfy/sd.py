@@ -731,9 +731,16 @@ class VAE:
                         self.upscale_ratio = 1920
                         self.downscale_ratio = 1920
 
+                yue2_vae_rs = False
                 if yue2_vae:
                     config.update(channels=64, c_mults=[1, 2, 4, 8, 16, 32], strides=[2, 2, 4, 4, 5, 6],
                                   sample_latent=False)
+                    # YuE2-VAE-RS (Ruach Studio's grown decoder): units at the latent rate and more units in every block
+                    pre = {k.split(".")[2] for k in sd if k.startswith("decoder.pre.")}
+                    units = {k.split(".")[4] for k in sd if k.startswith("decoder.layers.1.layers.") and k.split(".")[5:6] == ["layers"]}
+                    if pre or len(units) > 3:
+                        yue2_vae_rs = True
+                        config.update(decoder_pre_units=len(pre), decoder_extra_units=len(units) - 3)
                 self.first_stage_model = AudioOobleckVAE(**config)
                 self.memory_used_encode = lambda shape, dtype: (1000 * shape[2]) * model_management.dtype_size(dtype)
                 self.memory_used_decode = lambda shape, dtype: (1000 * shape[2] * 2048) * model_management.dtype_size(dtype)
@@ -749,6 +756,8 @@ class VAE:
                     self.audio_sample_rate = 48000
                     self.upscale_ratio = self.downscale_ratio = 1920
                     self.memory_used_decode = lambda shape, dtype: (1500 * shape[-1] * 1920) * model_management.dtype_size(dtype)
+                    if yue2_vae_rs:
+                        self.working_dtypes = [torch.float32]   # YuE2-VAE-RS is trained and validated in float32 only
             elif "blocks.2.blocks.3.stack.5.weight" in sd or "decoder.blocks.2.blocks.3.stack.5.weight" in sd or "layers.4.layers.1.attn_block.attn.qkv.weight" in sd or "encoder.layers.4.layers.1.attn_block.attn.qkv.weight" in sd: #genmo mochi vae
                 if "blocks.2.blocks.3.stack.5.weight" in sd:
                     sd = comfy.utils.state_dict_prefix_replace(sd, {"": "decoder."})

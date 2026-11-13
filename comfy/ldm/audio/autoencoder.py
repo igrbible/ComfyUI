@@ -141,7 +141,7 @@ class EncoderBlock(nn.Module):
         return self.layers(x)
 
 class DecoderBlock(nn.Module):
-    def __init__(self, in_channels, out_channels, stride, use_snake=False, antialias_activation=False, use_nearest_upsample=False):
+    def __init__(self, in_channels, out_channels, stride, use_snake=False, antialias_activation=False, use_nearest_upsample=False, extra_units=0):
         super().__init__()
 
         if use_nearest_upsample:
@@ -168,6 +168,9 @@ class DecoderBlock(nn.Module):
                          dilation=3, use_snake=use_snake),
             ResidualUnit(in_channels=out_channels, out_channels=out_channels,
                          dilation=9, use_snake=use_snake),
+            # YuE2-VAE-RS: further units after Standard's three, dilations 1, 3, 9 again
+            *[ResidualUnit(in_channels=out_channels, out_channels=out_channels,
+                           dilation=(1, 3, 9)[i % 3], use_snake=use_snake) for i in range(extra_units)],
         )
 
     def forward(self, x):
@@ -217,7 +220,9 @@ class OobleckDecoder(nn.Module):
                  use_snake=False,
                  antialias_activation=False,
                  use_nearest_upsample=False,
-                 final_tanh=True):
+                 final_tanh=True,
+                 pre_units=0,
+                 extra_units=0):
         super().__init__()
 
         c_mults = [1] + c_mults
@@ -228,6 +233,10 @@ class OobleckDecoder(nn.Module):
             WNConv1d(in_channels=latent_dim, out_channels=c_mults[-1]*channels, kernel_size=7, padding=3),
         ]
 
+        # YuE2-VAE-RS: residual units at the latent rate, between the first conv and the first upsampling block
+        self.pre = nn.Sequential(*[ResidualUnit(in_channels=c_mults[-1]*channels, out_channels=c_mults[-1]*channels,
+                                                dilation=(1, 3, 9)[i % 3], use_snake=use_snake) for i in range(pre_units)])
+
         for i in range(self.depth-1, 0, -1):
             layers += [DecoderBlock(
                 in_channels=c_mults[i]*channels,
@@ -235,7 +244,8 @@ class OobleckDecoder(nn.Module):
                 stride=strides[i-1],
                 use_snake=use_snake,
                 antialias_activation=antialias_activation,
-                use_nearest_upsample=use_nearest_upsample
+                use_nearest_upsample=use_nearest_upsample,
+                extra_units=extra_units
                 )
             ]
 
@@ -248,7 +258,9 @@ class OobleckDecoder(nn.Module):
         self.layers = nn.Sequential(*layers)
 
     def forward(self, x):
-        return self.layers(x)
+        if len(self.pre) == 0:
+            return self.layers(x)
+        return self.layers[1:](self.pre(self.layers[0](x)))
 
 
 class AudioOobleckVAE(nn.Module):
@@ -262,11 +274,14 @@ class AudioOobleckVAE(nn.Module):
                  antialias_activation=False,
                  use_nearest_upsample=False,
                  final_tanh=False,
-                 sample_latent=True):
+                 sample_latent=True,
+                 decoder_pre_units=0,
+                 decoder_extra_units=0):
         super().__init__()
         self.encoder = OobleckEncoder(in_channels, channels, latent_dim * 2, c_mults, strides, use_snake, antialias_activation)
         self.decoder = OobleckDecoder(in_channels, channels, latent_dim, c_mults, strides, use_snake, antialias_activation,
-                                      use_nearest_upsample=use_nearest_upsample, final_tanh=final_tanh)
+                                      use_nearest_upsample=use_nearest_upsample, final_tanh=final_tanh,
+                                      pre_units=decoder_pre_units, extra_units=decoder_extra_units)
         self.bottleneck = VAEBottleneck()
         self.sample_latent = sample_latent
 
